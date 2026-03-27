@@ -63,7 +63,7 @@ def plot_histogram(original_frame, stego_frame):
         axes[1].plot(hist_stego, color=color, alpha=0.7)
         
     plt.tight_layout()
-    plt.show()
+    return fig
     
 def cek_kapasitas(payload_binary, video_path, bits_per_pixel=8):
     "cek dulu kapasitas sebelum sisipin pesan"
