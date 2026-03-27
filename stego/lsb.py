@@ -1,4 +1,6 @@
 import numpy as np
+import struct
+import cv2
 from typing import Callable, Optional
 
 from stego.metadata import (
@@ -49,9 +51,6 @@ def _embed_bits_in_frame(
     lsb_b: int,
     pixel_indices: Optional[np.ndarray] = None,
 ) -> tuple[np.ndarray, int]:
-    """
-    Menyisipkan bits ke dalam satu frame
-    """
     h, w, _ = frame.shape
     total_pixels = h * w
     bits_per_pixel = lsb_r + lsb_g + lsb_b
@@ -64,52 +63,39 @@ def _embed_bits_in_frame(
         return frame.copy(), 0
 
     frame_out = frame.copy()
-    flat = frame_out.reshape(-1, 3)  # shape (H*W, 3), kolom = B, G, R
+    flat = frame_out.reshape(-1, 3)
 
-    # Tentukan urutan piksel
     if pixel_indices is None:
         indices = np.arange(total_pixels)
     else:
         indices = pixel_indices[:total_pixels]
 
-    # Sisipkan bit per channel
-    # OpenCV menyimpan frame dalam urutan BGR, jadi:
-    #   flat[:, 0] = B, flat[:, 1] = G, flat[:, 2] = R
-    bit_cursor = 0
     channels = [
-        (2, lsb_r),   # channel R
-        (1, lsb_g),   # channel G
-        (0, lsb_b),   # channel B
+        (2, lsb_r),
+        (1, lsb_g),
+        (0, lsb_b),
     ]
 
-    for ch_idx, n_bits in channels:
-        if n_bits == 0 or bit_cursor >= actual_count:
-            continue
+    bit_cursor = 0
 
-        # Ambil piksel sesuai urutan
-        n_pixels = min(
-            len(indices),
-            (actual_count - bit_cursor + n_bits - 1) // n_bits
-        )
-        pix = indices[:n_pixels]
+    for pix in indices:
+        if bit_cursor >= actual_count:
+            break
 
-        mask = np.uint8(0xFF << n_bits & 0xFF)
+        for ch_idx, n_bits in channels:
+            if n_bits == 0:
+                continue
 
-        for bit_offset in range(n_bits):
-            if bit_cursor >= actual_count:
-                break
+            for bit_offset in range(n_bits):
+                if bit_cursor >= actual_count:
+                    break
 
-            # Ambil satu bit dari setiap piksel yang akan diproses
-            n_pix_this = min(n_pixels, actual_count - bit_cursor)
-            chunk = bits_to_embed[bit_cursor : bit_cursor + n_pix_this]
+                shift = n_bits - 1 - bit_offset
+                bit = np.uint8(bits_to_embed[bit_cursor])
+                clear_mask = np.uint8(0xFF ^ (1 << shift))
 
-            # Shift bit ke posisi yang tepat dalam byte
-            shift = n_bits - 1 - bit_offset
-            flat[pix[:n_pix_this], ch_idx] = (
-                (flat[pix[:n_pix_this], ch_idx] & mask)
-                | (chunk.astype(np.uint8) << shift)
-            )
-            bit_cursor += n_pix_this
+                flat[pix, ch_idx] = (flat[pix, ch_idx] & clear_mask) | (bit << shift)
+                bit_cursor += 1
 
     return frame_out, bit_cursor
 
@@ -122,9 +108,6 @@ def _extract_bits_from_frame(
     lsb_b: int,
     pixel_indices: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """
-    Mengekstrak bits dari satu frame
-    """
     h, w, _ = frame.shape
     total_pixels = h * w
     bits_per_pixel = lsb_r + lsb_g + lsb_b
@@ -138,35 +121,30 @@ def _extract_bits_from_frame(
     else:
         indices = pixel_indices[:total_pixels]
 
-    extracted = np.zeros(actual_read, dtype=np.uint8)
-    bit_cursor = 0
-
     channels = [
         (2, lsb_r),
         (1, lsb_g),
         (0, lsb_b),
     ]
 
-    for ch_idx, n_bits in channels:
-        if n_bits == 0 or bit_cursor >= actual_read:
-            continue
+    extracted = np.zeros(actual_read, dtype=np.uint8)
+    bit_cursor = 0
 
-        n_pixels = min(
-            len(indices),
-            (actual_read - bit_cursor + n_bits - 1) // n_bits
-        )
-        pix = indices[:n_pixels]
+    for pix in indices:
+        if bit_cursor >= actual_read:
+            break
 
-        for bit_offset in range(n_bits):
-            if bit_cursor >= actual_read:
-                break
+        for ch_idx, n_bits in channels:
+            if n_bits == 0:
+                continue
 
-            shift = n_bits - 1 - bit_offset
-            n_pix_this = min(n_pixels, actual_read - bit_cursor)
-            extracted[bit_cursor : bit_cursor + n_pix_this] = (
-                (flat[pix[:n_pix_this], ch_idx] >> shift) & 1
-            ).astype(np.uint8)
-            bit_cursor += n_pix_this
+            for bit_offset in range(n_bits):
+                if bit_cursor >= actual_read:
+                    break
+
+                shift = n_bits - 1 - bit_offset
+                extracted[bit_cursor] = (flat[pix, ch_idx] >> shift) & 1
+                bit_cursor += 1
 
     return extracted[:bit_cursor]
 
@@ -241,28 +219,31 @@ def embed(
     total_usable = 1 + usable_frames  # frame 0 (header) + frame payload
 
     with VideoReader(cover_path) as reader:
-        with VideoWriter(output_path, fps=fps, size=size) as writer:
-            reader._cap.set(0, 0)
-            frame_idx = 0
+        fourcc = cv2.VideoWriter_fourcc(*"FFV1")
+        writer = cv2.VideoWriter(output_path, fourcc, 25.0, size)
 
+        if not writer.isOpened():
+            raise IOError(f"Gagal membuat file video: {output_path}")
+
+        reader._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        frame_idx = 0
+
+        try:
             while True:
                 ret, frame = reader._cap.read()
                 if not ret:
                     break
 
                 if frame_idx == 0:
-                    # Frame 0: sisipkan header
                     frame, _ = _embed_bits_in_frame(
                         frame, header_bits, lsb_r, lsb_g, lsb_b
                     )
                     processed_frames += 1
 
                 elif (frame_idx - 1) % frame_step == 0 and payload_cursor < len(payload_bits):
-                    # Frame payload
                     remaining = payload_bits[payload_cursor:]
                     frame, consumed = _embed_bits_in_frame(
-                        frame, remaining, lsb_r, lsb_g, lsb_b,
-                        pixel_indices
+                        frame, remaining, lsb_r, lsb_g, lsb_b, pixel_indices
                     )
                     payload_cursor += consumed
                     processed_frames += 1
@@ -272,6 +253,8 @@ def embed(
 
                 if progress_cb:
                     progress_cb(processed_frames, total_usable)
+        finally:
+            writer.release()
 
     return meta
 
@@ -283,11 +266,111 @@ def extract(
     stegokey: str = "",
     progress_cb: ProgressCallback = None,
 ) -> tuple[StegoMetadata, bytes]:
-    """
-    Mengekstrak pesan dari stego-video
-    """
+    with VideoReader(stego_path) as reader:
+        info = reader.get_info()
+        total_frames = info["frame_count"]
+        pixels_per_frame = info["width"] * info["height"]
 
-    return
+        ret, frame0 = reader._cap.read()
+        if not ret:
+            raise ValueError("Gagal membaca frame pertama dari stego-video.")
+
+        fixed_header_bits = _extract_bits_from_frame(
+            frame0,
+            HEADER_SIZE * 8,
+            lsb_r,
+            lsb_g,
+            lsb_b,
+        )
+        fixed_header_bytes = _bitarray_to_bytes(fixed_header_bits)
+
+        if len(fixed_header_bytes) < HEADER_SIZE:
+            raise InvalidHeaderError("Header terlalu pendek.")
+
+        if fixed_header_bytes[:4] != b"STGV":
+            raise InvalidHeaderError("Magic bytes tidak valid")
+
+        (
+            _magic,
+            msg_type,
+            encrypted,
+            mode,
+            frame_step,
+            meta_lsb_r,
+            meta_lsb_g,
+            meta_lsb_b,
+            ext_len,
+            payload_size,
+            crc32,
+            name_len,
+        ) = struct.unpack(">4sBBBBBBBBIII", fixed_header_bytes[:HEADER_SIZE])
+
+        total_header_bytes = HEADER_SIZE + ext_len + name_len
+        total_header_bits = total_header_bytes * 8
+
+        header_capacity_bits = info["width"] * info["height"] * (lsb_r + lsb_g + lsb_b)
+        if total_header_bits > header_capacity_bits:
+            raise InvalidHeaderError("Header melebihi kapasitas frame pertama.")
+
+        full_header_bits = _extract_bits_from_frame(
+            frame0,
+            total_header_bits,
+            lsb_r,
+            lsb_g,
+            lsb_b,
+        )
+        full_header_bytes = _bitarray_to_bytes(full_header_bits)[:total_header_bytes]
+
+        meta, _ = unpack_header(full_header_bytes)
+
+        pixel_indices = None
+
+        payload_bits_needed = meta.payload_size * 8
+        payload_bits_collected = []
+        processed_frames = 1
+        frame_idx = 1
+
+        while True:
+            ret, frame = reader._cap.read()
+            if not ret:
+                break
+
+            if (frame_idx - 1) % meta.frame_step == 0 and payload_bits_needed > 0:
+                frame_bits = _extract_bits_from_frame(
+                    frame,
+                    payload_bits_needed,
+                    meta.lsb_r,
+                    meta.lsb_g,
+                    meta.lsb_b,
+                    pixel_indices,
+                )
+                payload_bits_collected.append(frame_bits)
+                payload_bits_needed -= len(frame_bits)
+                processed_frames += 1
+
+                if progress_cb:
+                    progress_cb(processed_frames, total_frames)
+
+                if payload_bits_needed <= 0:
+                    break
+
+            frame_idx += 1
+
+        if payload_bits_collected:
+            payload_bits = np.concatenate(payload_bits_collected)
+            payload = _bitarray_to_bytes(payload_bits)[:meta.payload_size]
+        else:
+            payload = b""
+
+        if len(payload) != meta.payload_size:
+            raise ValueError(
+                f"Payload tidak lengkap. Diharapkan {meta.payload_size} byte, didapat {len(payload)} byte."
+            )
+
+        if not verify_payload(payload, meta.crc32):
+            raise ValueError("CRC32 payload tidak cocok. Data rusak atau parameter ekstraksi salah.")
+
+        return meta, payload
 
 def check_capacity(
     cover_path: str,

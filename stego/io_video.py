@@ -125,7 +125,7 @@ class VideoWriter:
     """
 
     # Codec yang direkomendasikan untuk AVI lossless
-    CODEC = "XVID"
+    CODEC = "FFV1"
 
     def __init__(self, path: str, fps: float, size: Tuple[int, int]):
         if not path.lower().endswith(".avi"):
