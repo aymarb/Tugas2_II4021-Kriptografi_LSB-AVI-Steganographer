@@ -220,7 +220,7 @@ def embed(
 
     with VideoReader(cover_path) as reader:
         fourcc = cv2.VideoWriter_fourcc(*"FFV1")
-        writer = cv2.VideoWriter(output_path, fourcc, 25.0, size)
+        writer = cv2.VideoWriter(output_path, fourcc, fps, size)
 
         if not writer.isOpened():
             raise IOError(f"Gagal membuat file video: {output_path}")
@@ -324,6 +324,8 @@ def extract(
         meta, _ = unpack_header(full_header_bytes)
 
         pixel_indices = None
+        if meta.is_random and stegokey:
+            pixel_indices = generate_pixel_permutation(stegokey, pixels_per_frame)
 
         payload_bits_needed = meta.payload_size * 8
         payload_bits_collected = []
