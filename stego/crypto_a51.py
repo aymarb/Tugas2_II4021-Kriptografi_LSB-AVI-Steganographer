@@ -69,17 +69,19 @@ class MesinA51:
         return "".join(result)
 
 
-def enkripsi_a51(payload_biner_asli, password):
+def enkripsi_a51(payload: bytes, password: str) -> bytes:
     if not password:
-        password = "Kriptografi_asik"
-        
+        raise ValueError("Kunci A5/1 tidak boleh kosong.")
+    biner = ''.join(format(b, '08b') for b in payload)
     mesin = MesinA51(password)
-    return mesin.proses(payload_biner_asli)
+    cipher_biner = mesin.proses(biner)
+    return bytes(int(cipher_biner[i:i+8], 2) for i in range(0, len(cipher_biner), 8))
 
 
-def dekripsi_a51(cipher_biner, password):
+def dekripsi_a51(cipher: bytes, password: str) -> bytes:
     if not password:
-        password = "Kriptografi_asik"
-        
+        raise ValueError("Kunci A5/1 tidak boleh kosong.")
+    biner = ''.join(format(b, '08b') for b in cipher)
     mesin = MesinA51(password)
-    return mesin.proses(cipher_biner)
+    plain_biner = mesin.proses(biner)
+    return bytes(int(plain_biner[i:i+8], 2) for i in range(0, len(plain_biner), 8))
