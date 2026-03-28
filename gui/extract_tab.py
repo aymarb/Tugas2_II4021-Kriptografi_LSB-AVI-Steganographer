@@ -604,18 +604,29 @@ class ExtractTab(ctk.CTkScrollableFrame):
             return
 
         self._log("[analysis] Memuat frame untuk analisis...")
+        meta = self._meta
 
         def _load():
             try:
                 orig_frames, stego_frames = self._load_frames_pair(
                     self._cover_path, self._stego_path
                 )
-                mse_list  = [hitung_mse(o, s) for o, s in zip(orig_frames, stego_frames)]
+                if meta is not None:
+                    step = meta.frame_step
+                    modified_indices = [0] + list(range(1, len(orig_frames), step))
+                    orig_mod  = [orig_frames[i]  for i in modified_indices if i < len(orig_frames)]
+                    stego_mod = [stego_frames[i] for i in modified_indices if i < len(stego_frames)]
+                else:
+                    orig_mod, stego_mod = orig_frames, stego_frames
+
+                mse_list  = [hitung_mse(o, s) for o, s in zip(orig_mod, stego_mod)]
                 psnr_list = [hitung_psnr(m) for m in mse_list]
                 avg_mse   = sum(mse_list) / len(mse_list) if mse_list else 0
-                avg_psnr  = sum(psnr_list) / len(psnr_list) if psnr_list else 0
+                avg_psnr  = sum(p for p in psnr_list if p != float('inf')) / \
+                            max(1, sum(1 for p in psnr_list if p != float('inf')))
+
                 self.after(0, lambda: self._update_analysis(
-                    orig_frames, stego_frames, avg_mse, avg_psnr, len(orig_frames)
+                    orig_frames, stego_frames, avg_mse, avg_psnr, len(orig_mod)
                 ))
             except Exception as e:
                 self.after(0, lambda err=e: self._log(

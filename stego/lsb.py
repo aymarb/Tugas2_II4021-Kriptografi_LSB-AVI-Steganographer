@@ -219,7 +219,7 @@ def embed(
     total_usable = 1 + usable_frames  # frame 0 (header) + frame payload
 
     with VideoReader(cover_path) as reader:
-        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+        fourcc = cv2.VideoWriter_fourcc(*"FFV1")
         writer = cv2.VideoWriter(output_path, fourcc, fps, size)
 
         if not writer.isOpened():
