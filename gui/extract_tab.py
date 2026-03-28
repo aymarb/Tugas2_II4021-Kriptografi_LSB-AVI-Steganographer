@@ -246,12 +246,14 @@ class ExtractTab(ctk.CTkScrollableFrame):
         self._badge_frame = ctk.CTkFrame(self._ok_frame, fg_color="transparent")
         self._badge_frame.grid(row=0, column=0, sticky="w", pady=(0, 8))
 
-        # Nama file / tampilan teks
-        self._lbl("Nama file asli", row=1, parent=self._ok_frame)
-        save_row = ctk.CTkFrame(self._ok_frame, fg_color="transparent")
-        save_row.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        # Nama file + tombol simpan
+        self._filename_row = ctk.CTkFrame(self._ok_frame, fg_color="transparent")
+        self._filename_row.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        self._filename_row.grid_columnconfigure(0, weight=1)
+        self._lbl("Nama file asli", row=0, parent=self._filename_row)
+        save_row = ctk.CTkFrame(self._filename_row, fg_color="transparent")
+        save_row.grid(row=1, column=0, sticky="ew", pady=(0, 4))
         save_row.grid_columnconfigure(0, weight=1)
-
         self._filename_entry = ctk.CTkEntry(save_row, placeholder_text="—")
         self._filename_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         self._save_btn = ctk.CTkButton(
@@ -260,13 +262,21 @@ class ExtractTab(ctk.CTkScrollableFrame):
         )
         self._save_btn.grid(row=0, column=1)
 
-        self._lbl("Isi pesan", row=3, parent=self._ok_frame)
+        # Tampilan teks + tombol copy
+        self._lbl("Isi pesan", row=2, parent=self._ok_frame)
         self._result_textbox = ctk.CTkTextbox(
             self._ok_frame, height=100,
             font=ctk.CTkFont(family="Courier", size=11),
             state="disabled",
         )
-        self._result_textbox.grid(row=4, column=0, sticky="ew", pady=(0, 8))
+        self._result_textbox.grid(row=3, column=0, sticky="ew", pady=(0, 4))
+
+        self._copy_btn = ctk.CTkButton(
+            self._ok_frame, text="Salin ke Clipboard", width=160,
+            fg_color="transparent", border_width=1,
+            command=self._copy_to_clipboard,
+        )
+        self._copy_btn.grid(row=4, column=0, sticky="w", pady=(0, 8))
 
         self._sep(row=21, parent=self._result_frame)
 
@@ -319,20 +329,31 @@ class ExtractTab(ctk.CTkScrollableFrame):
             font=ctk.CTkFont(size=12, weight="bold"),
         ).grid(row=0, column=0, sticky="w")
 
-        slider_frame = ctk.CTkFrame(self._hist_header, fg_color="transparent")
-        slider_frame.grid(row=0, column=1, sticky="e")
-        self._frame_slider = ctk.CTkSlider(
-            slider_frame, from_=0, to=1, number_of_steps=1,
-            command=self._on_frame_slider,
-            width=120,
+        nav_frame = ctk.CTkFrame(self._hist_header, fg_color="transparent")
+        nav_frame.grid(row=0, column=1, sticky="e")
+
+        ctk.CTkButton(
+            nav_frame, text="◀", width=32, height=28,
+            command=self._prev_frame,
+        ).pack(side="left", padx=(0, 4))
+
+        self._frame_num_entry = ctk.CTkEntry(
+            nav_frame, width=52, justify="center",
         )
-        self._frame_slider.set(0)
-        self._frame_slider.pack(side="left")
-        self._frame_num_lbl = ctk.CTkLabel(
-            slider_frame, text="0",
-            font=ctk.CTkFont(size=11), width=28,
+        self._frame_num_entry.insert(0, "0")
+        self._frame_num_entry.pack(side="left")
+        self._frame_num_entry.bind("<Return>", lambda e: self._on_frame_entry())
+
+        self._frame_total_lbl = ctk.CTkLabel(
+            nav_frame, text="/ 0",
+            font=ctk.CTkFont(size=11), text_color="gray", width=40,
         )
-        self._frame_num_lbl.pack(side="left", padx=(4, 0))
+        self._frame_total_lbl.pack(side="left", padx=(4, 0))
+
+        ctk.CTkButton(
+            nav_frame, text="▶", width=32, height=28,
+            command=self._next_frame,
+        ).pack(side="left", padx=(4, 0))
 
         self._hist_frame = ctk.CTkFrame(
             self._analysis_frame,
@@ -525,16 +546,16 @@ class ExtractTab(ctk.CTkScrollableFrame):
             ).grid(row=0, column=i, padx=(0, 6))
 
         if meta.is_file:
-            # Tampilkan nama file + tombol simpan
+            self._filename_row.grid()
+            self._copy_btn.grid_remove()
+            self._result_textbox.grid_remove()
             self._filename_entry.configure(state="normal")
             self._filename_entry.delete(0, "end")
             self._filename_entry.insert(0, meta.filename_str or "extracted_file")
-            self._result_textbox.grid_remove()
-            self._filename_entry.master.grid()
             self._save_btn.configure(state="normal")
         else:
-            # Tampilkan isi teks
-            self._filename_entry.master.grid_remove()
+            self._filename_row.grid_remove()
+            self._copy_btn.grid()
             self._result_textbox.grid()
             self._result_textbox.configure(state="normal")
             self._result_textbox.delete("1.0", "end")
@@ -550,6 +571,13 @@ class ExtractTab(ctk.CTkScrollableFrame):
                  "Pastikan skema LSB, stego-key, dan kunci A5/1 sama persis "
                  "dengan yang digunakan saat penyisipan."
         )
+
+    def _copy_to_clipboard(self):
+        text = self._result_textbox.get("1.0", "end").strip()
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self._copy_btn.configure(text="Tersalin ✓")
+        self.after(2000, lambda: self._copy_btn.configure(text="Salin ke Clipboard"))
 
     def _save_file(self):
         if self._payload is None:
@@ -599,6 +627,7 @@ class ExtractTab(ctk.CTkScrollableFrame):
     def _update_analysis(self, orig_frames, stego_frames, avg_mse, avg_psnr, n_frames):
         self._orig_frames  = orig_frames
         self._stego_frames = stego_frames
+        self._current_frame_idx = 0
 
         self._cards_frame.grid()
         self._hist_header.grid()
@@ -608,19 +637,42 @@ class ExtractTab(ctk.CTkScrollableFrame):
         self._psnr_lbl.configure(text=f"{avg_psnr:.2f}")
         self._frame_lbl.configure(text=str(n_frames))
 
-        max_idx = max(0, n_frames - 1)
-        self._frame_slider.configure(to=max_idx, number_of_steps=max_idx)
-        self._frame_slider.set(0)
-        self._frame_num_lbl.configure(text="0")
+        total = max(0, len(orig_frames) - 1)
+        self._frame_num_entry.delete(0, "end")
+        self._frame_num_entry.insert(0, "0")
+        self._frame_total_lbl.configure(text=f"/ {total}")
 
         self._draw_histogram(0)
         self._log(f"[analysis] MSE={avg_mse:.4f}  PSNR={avg_psnr:.2f} dB")
 
-    def _on_frame_slider(self, value):
-        idx = int(round(value))
-        self._frame_num_lbl.configure(text=str(idx))
-        if hasattr(self, "_orig_frames") and self._orig_frames:
-            self._draw_histogram(idx)
+    def _on_frame_entry(self):
+        try:
+            idx = int(self._frame_num_entry.get())
+            idx = max(0, min(idx, len(self._orig_frames) - 1))
+        except ValueError:
+            idx = 0
+        self._current_frame_idx = idx
+        self._frame_num_entry.delete(0, "end")
+        self._frame_num_entry.insert(0, str(idx))
+        self._draw_histogram(idx)
+
+    def _prev_frame(self):
+        if not hasattr(self, "_orig_frames") or not self._orig_frames:
+            return
+        idx = max(0, self._current_frame_idx - 1)
+        self._current_frame_idx = idx
+        self._frame_num_entry.delete(0, "end")
+        self._frame_num_entry.insert(0, str(idx))
+        self._draw_histogram(idx)
+
+    def _next_frame(self):
+        if not hasattr(self, "_orig_frames") or not self._orig_frames:
+            return
+        idx = min(len(self._orig_frames) - 1, self._current_frame_idx + 1)
+        self._current_frame_idx = idx
+        self._frame_num_entry.delete(0, "end")
+        self._frame_num_entry.insert(0, str(idx))
+        self._draw_histogram(idx)
 
     def _draw_histogram(self, frame_idx: int):
         if self._canvas_widget:

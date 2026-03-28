@@ -319,22 +319,32 @@ class EmbedTab(ctk.CTkScrollableFrame):
             font=ctk.CTkFont(size=12, weight="bold"),
         ).grid(row=0, column=0, sticky="w")
 
-        slider_frame = ctk.CTkFrame(hist_header, fg_color="transparent")
-        slider_frame.grid(row=0, column=1, sticky="e")
-        self._frame_slider = ctk.CTkSlider(
-            slider_frame, from_=0, to=1, number_of_steps=1,
-            command=self._on_frame_slider,
-            width=120,
-        )
-        self._frame_slider.set(0)
-        self._frame_slider.pack(side="left")
-        self._frame_num_lbl = ctk.CTkLabel(
-            slider_frame, text="0",
-            font=ctk.CTkFont(size=11), width=28,
-        )
-        self._frame_num_lbl.pack(side="left", padx=(4, 0))
+        nav_frame = ctk.CTkFrame(hist_header, fg_color="transparent")
+        nav_frame.grid(row=0, column=1, sticky="e")
 
-        # Placeholder untuk canvas matplotlib
+        ctk.CTkButton(
+            nav_frame, text="◀", width=32, height=28,
+            command=self._prev_frame,
+        ).pack(side="left", padx=(0, 4))
+
+        self._frame_num_entry = ctk.CTkEntry(
+            nav_frame, width=52, justify="center",
+        )
+        self._frame_num_entry.insert(0, "0")
+        self._frame_num_entry.pack(side="left")
+        self._frame_num_entry.bind("<Return>", lambda e: self._on_frame_entry())
+
+        self._frame_total_lbl = ctk.CTkLabel(
+            nav_frame, text="/ 0",
+            font=ctk.CTkFont(size=11), text_color="gray", width=40,
+        )
+        self._frame_total_lbl.pack(side="left", padx=(4, 0))
+
+        ctk.CTkButton(
+            nav_frame, text="▶", width=32, height=28,
+            command=self._next_frame,
+        ).pack(side="left", padx=(4, 0))
+
         self._hist_frame = ctk.CTkFrame(
             self._analysis_frame,
             fg_color=("gray90", "gray15"),
@@ -563,14 +573,24 @@ class EmbedTab(ctk.CTkScrollableFrame):
                 orig_frames, stego_frames = self._load_frames_pair(
                     self._cover_path_result, output_path
                 )
-                mse_list  = [hitung_mse(o, s) for o, s in zip(orig_frames, stego_frames)]
+                step = meta.frame_step
+                modified_indices = [0] + list(range(1, len(orig_frames), step))
+                orig_mod  = [orig_frames[i]  for i in modified_indices if i < len(orig_frames)]
+                stego_mod = [stego_frames[i] for i in modified_indices if i < len(stego_frames)]
+
+                mse_list  = [hitung_mse(o, s) for o, s in zip(orig_mod, stego_mod)]
                 psnr_list = [hitung_psnr(m) for m in mse_list]
                 avg_mse   = sum(mse_list) / len(mse_list) if mse_list else 0
-                avg_psnr  = sum(psnr_list) / len(psnr_list) if psnr_list else 0
+                avg_psnr  = sum(p for p in psnr_list if p != float('inf')) / \
+                            max(1, sum(1 for p in psnr_list if p != float('inf')))
 
                 self.after(0, lambda: self._update_analysis(
                     orig_frames, stego_frames,
-                    avg_mse, avg_psnr, len(orig_frames),
+                    avg_mse, avg_psnr, len(orig_mod),
+                ))
+            except Exception as e:
+                self.after(0, lambda err=e: self._log(
+                    f"[analysis error] {err}", level="error"
                 ))
             except Exception as e:
                 self.after(0, lambda err=e: self._log(
@@ -582,25 +602,48 @@ class EmbedTab(ctk.CTkScrollableFrame):
     def _update_analysis(self, orig_frames, stego_frames, avg_mse, avg_psnr, n_frames):
         self._orig_frames  = orig_frames
         self._stego_frames = stego_frames
+        self._current_frame_idx = 0
 
         self._mse_lbl.configure(text=f"{avg_mse:.4f}")
         self._psnr_lbl.configure(text=f"{avg_psnr:.2f}")
         self._frame_lbl.configure(text=str(n_frames))
 
-        # Setup slider
-        max_idx = max(0, n_frames - 1)
-        self._frame_slider.configure(to=max_idx, number_of_steps=max_idx)
-        self._frame_slider.set(0)
-        self._frame_num_lbl.configure(text="0")
+        total = max(0, len(orig_frames) - 1)
+        self._frame_num_entry.delete(0, "end")
+        self._frame_num_entry.insert(0, "0")
+        self._frame_total_lbl.configure(text=f"/ {total}")
 
         self._draw_histogram(0)
-        self._log(f"[analysis] MSE={avg_mse:.4f}  PSNR={avg_psnr:.2f} dB")
+        self._log(f"[analysis] MSE={avg_mse:.4f}  PSNR={avg_psnr:.2f} dB  ({n_frames} frame dimodifikasi)")
 
-    def _on_frame_slider(self, value):
-        idx = int(round(value))
-        self._frame_num_lbl.configure(text=str(idx))
-        if hasattr(self, "_orig_frames") and self._orig_frames:
-            self._draw_histogram(idx)
+    def _on_frame_entry(self):
+        try:
+            idx = int(self._frame_num_entry.get())
+            idx = max(0, min(idx, len(self._orig_frames) - 1))
+        except ValueError:
+            idx = 0
+        self._current_frame_idx = idx
+        self._frame_num_entry.delete(0, "end")
+        self._frame_num_entry.insert(0, str(idx))
+        self._draw_histogram(idx)
+
+    def _prev_frame(self):
+        if not hasattr(self, "_orig_frames") or not self._orig_frames:
+            return
+        idx = max(0, self._current_frame_idx - 1)
+        self._current_frame_idx = idx
+        self._frame_num_entry.delete(0, "end")
+        self._frame_num_entry.insert(0, str(idx))
+        self._draw_histogram(idx)
+
+    def _next_frame(self):
+        if not hasattr(self, "_orig_frames") or not self._orig_frames:
+            return
+        idx = min(len(self._orig_frames) - 1, self._current_frame_idx + 1)
+        self._current_frame_idx = idx
+        self._frame_num_entry.delete(0, "end")
+        self._frame_num_entry.insert(0, str(idx))
+        self._draw_histogram(idx)
 
     def _draw_histogram(self, frame_idx: int):
         """Render histogram matplotlib ke dalam widget CTk."""
@@ -671,7 +714,7 @@ class EmbedTab(ctk.CTkScrollableFrame):
 
     @staticmethod
     def _load_frames_pair(orig_path: str, stego_path: str):
-        """Membaca semua frame dari dua video untuk analisis."""
+        """Membaca semua frame dari dua video untuk analisis"""
         def _read(path):
             cap = cv2.VideoCapture(path)
             frames = []
