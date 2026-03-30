@@ -252,7 +252,7 @@ def embed(
                 frame_idx += 1
 
                 if progress_cb:
-                    progress_cb(processed_frames, total_usable)
+                    progress_cb(frame_idx, total_frames)
         finally:
             writer.release()
 
