@@ -1,0 +1,1 @@
+Halo, ini file payload uji untuk steganografi video AVI.
